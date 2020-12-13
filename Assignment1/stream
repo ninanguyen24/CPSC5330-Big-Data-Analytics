@@ -1,0 +1,70 @@
+#!/bin/bash
+echo Step 1 --term count
+
+hdfs dfs -rm /user/training/data-output/assignment1/*
+hdfs dfs -rmdir /user/training/data-output/assingment1
+
+hadoop jar /usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
+    -file /home/training/assignment1/mapper1.py \
+    -mapper /home/training/assignment1/mapper1.py \
+    -file /home/training/assignment1/reducer1.py \
+    -reducer /home/training/assignment1/reducer1.py \
+    -input /user/training/data-input/documents/* \
+    -output /user/training/data-output/term-count \
+
+hadoop jar /usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
+    -file /home/training/assignment1/mapper2.py \
+    -mapper /home/training/assignment1/mapper2.py \
+    -file /home/training/assignment1/reducer2.py \
+    -reducer /home/training/assignment1/reducer2.py \
+    -input /user/training/data-input/documents/* \
+    -output /user/training/data-output/doc-length \
+
+
+hadoop jar /usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
+-D mapred.reduce.tasks=0 \
+-file /home/training/assignment1/mapper3.py \
+-mapper /home/training/assignment1/mapper3.py \
+-input /user/training/data-output/term-count \
+-output /user/training/data-output/split-doc-term
+
+hadoop jar /usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
+    -file /home/training/assignment1/mapper4.py \
+    -mapper /home/training/assignment1/mapper4.py \
+    -file /home/training/assignment1/reducer4.py \
+    -reducer /home/training/assignment1/reducer4.py \
+    -input /user/training/data-input/documents/* \
+    -output /user/training/data-output/compute-df \
+
+
+sudo service hive-server2 start
+
+#step 2 table
+create external table compute_tf (doc_id string, term_count int) ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t' LOCATION '/user/training/data-output/doc-length';
+
+#step 3 table
+create external table split_key (doc_id string, term string, count int) ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t' LOCATION '/user/training/data-output/split-doc-term';
+
+#step 5 table
+create external table compute_df (term string, unique_doc_id int) ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t' LOCATION '/user/training/data-output/compute-df';
+
+
+#join step 2 and step 3 -- step 4
+create external table step2_and_step3 as select l.doc_id, l.term, l.count, r.term_count from split_key l, compute_tf r where l.doc_id = r.doc_id;
+
+create table join_compute_tf as select l.doc_id, l.term, l.count/r.term_count as tf from split_key l, compute_tf r where l.doc_id = r.doc_id;
+
+create external table join_compute_tf as select compute_tf.doc_id, term_count, term, count from compute_tf join split_key on (compute_tf.doc_id = split_key.doc_id);
+
+#join step 4 and and step 5
+create external table step4_and_step5 as select l.doc_id, l.term, l.count, l.term_count, r.unique_doc_id from step2_and_step3 l, compute_df r where l.term = r.term;
+
+create table compute_tfidf as select l.doc_id, l.term, l.tf, r.unique_doc_id from join_compute_tf l, compute_df r where l.term  = r.term;
+
+#step 6
+create external table final_join as select doc_id, term, cast(count as double)/term_count/unique_doc_id as tf_idf from step4_and_step5;
+
+create table final_tfidf as select doc_id, term, cast(tf as double)/unique_doc_id as tf_idf from compute_tfidf;
+
+
+
